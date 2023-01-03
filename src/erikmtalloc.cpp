@@ -10,6 +10,7 @@
 #include <condition_variable>
 
 #include "erikmtalloc.h"
+#include "utils.h"
 
 using namespace std;
 
@@ -31,28 +32,17 @@ struct allocation {
 
 typedef struct allocation allocation;
 
-char *debug_environ = std::getenv("ERIKMTALLOC_DEBUG");
-
 // Linked list to track allocations for re-use/cleanup
 allocation *root;
 allocation *cur;
 size_t pagesize = sysconf(_SC_PAGE_SIZE);
-
-template <typename ...Args>
-void debug(Args&& ...args) {
-    std::ostringstream stream;
-    (stream << ... << forward<Args>(args));
-    //(stream << ... << std::forward<Args>(args)) << '\n';
-
-    cout << stream.str() << endl;
-}
 
 void tag_chunk(char *chunk, size_t aligned_size) {
     // Add a header and footer identifying metadata for new chunk,
     // then add the chunk to the chunk map list.
     // Add footer to end of allocation
     struct allocation *footer = (struct allocation*) (static_cast<char*>(chunk) + (aligned_size - sizeof(allocation)));
-    cout << "writing CHUNK footer at " << footer << endl;
+    debug(cout, "writing CHUNK footer at", footer);
     
     footer->next = nullptr;
     footer->size = 0;
@@ -61,7 +51,7 @@ void tag_chunk(char *chunk, size_t aligned_size) {
     footer->is_parent = true;
 
     struct allocation *header = (struct allocation*) chunk;
-    cout << "writing CHUNK header at " << header << endl;
+    debug(cout, "writing CHUNK header at", header);
 
     header->next = footer;
     header->size = aligned_size - pagesize;
@@ -120,7 +110,7 @@ void* create_segment_in_chunk(allocation* chunk, size_t size) {
 
     // Now write a header and footer for the new segment
     // Add footer to end of allocation
-    cout << "writing segment footer at " << cur + (sizeof(allocation)*2) + (size/sizeof(allocation)) << endl;
+    debug(cout, "writing segment footer at", cur + (sizeof(allocation)*2) + (size/sizeof(allocation)));
     struct allocation *footer = (struct allocation*) cur + (sizeof(allocation)*2) + (size/sizeof(allocation));
 
     footer->next = cur->next;
@@ -129,7 +119,7 @@ void* create_segment_in_chunk(allocation* chunk, size_t size) {
     footer->is_footer = true;
     footer->is_parent = false;
 
-    cout << "writing segment header at " <<  cur + (sizeof(allocation)) << endl;
+    debug(cout, "writing segment header at", cur + (sizeof(allocation)));
     struct allocation *header = (struct allocation*) cur + (sizeof(allocation));
 
     header->next = footer;
@@ -140,9 +130,11 @@ void* create_segment_in_chunk(allocation* chunk, size_t size) {
 
     cur->next = header;
 
-    cout << "Header next is " << header->next << " and footer next is " << footer->next << endl;
+    debug(cout, "Header next is", header->next, "and footer next is", footer->next);
 
-    //print_memory_stack();
+#ifdef DEBUG
+    print_memory_stack();
+#endif
 
     return (void*) (cur + sizeof(allocation) + 1);
 }
@@ -162,20 +154,24 @@ void *get_segment(size_t size) {
 }
 
 void *find_segment(size_t minimum_size) {
-    //print_memory_stack();
+#ifdef DEBUG
+    print_memory_stack();
+#endif
 
-    cout << "Searching for free segment.." << endl;
+    debug(cout, "Searching for free segment..");
+
     allocation *r = root;
     
     while (r != NULL) {
-        cout << "Checking " << r << " with size " << r->size << " and allocated state " << (r->is_allocated ? "true" : "false") << endl;
+        debug(cout, "Checking", r, "with size ", r->size, "and allocated state", (r->is_allocated ? "true" : "false"));
         if (r->size >= (minimum_size+pagesize) && r->is_allocated == false && r->is_parent == true && r->is_footer == false) {
-            cout << "Found a free MMAP chunk (need " << minimum_size << " bytes, have " << r->size << " bytes available." << endl;
+            debug(cout, "Found a free MMAP chunk (need ", minimum_size, " bytes, have ", r->size, " bytes available.");
             return create_segment_in_chunk(r, minimum_size);
         }
         r = r->next;
     }
-    cout << "No suitable segments available, need to allocate one." << endl;
+
+    debug(cout, "No suitable segments available, need to allocate one.");
 
     return NULL;
 }
@@ -216,9 +212,7 @@ void unlink_node(allocation* a, allocation* node_to_remove) {
 }
 
 void free_segment(void* ptr) {
-    cout << "In free_segment() for ptr: " << ptr
-        << " Struct ptr is: " << ((void*) (static_cast<char*>(ptr) - sizeof(allocation)))
-        << endl;
+    debug(cout, "In free_segment() for ptr: ", ptr, "struct ptr is: ", ((void*) (static_cast<char*>(ptr) - sizeof(allocation))));
 
     void *p = ((void *)(static_cast<char *>(ptr) - sizeof(allocation)));
 
