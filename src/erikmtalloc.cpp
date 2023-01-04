@@ -1,18 +1,11 @@
-#include <bits/stdc++.h>
-#include <cstddef>
-#include <cstdint>
 #include <ostream>
 #include <sys/mman.h>
-#include <type_traits>
 #include <unistd.h>
 #include <thread>
 #include <mutex>
-#include <condition_variable>
 
 #include "erikmtalloc.h"
 #include "utils.h"
-
-using namespace std;
 
 #define DEFAULT_CHUNK_SIZE 1024*256 // 256KB chunks
 
@@ -42,7 +35,7 @@ void tag_chunk(char *chunk, size_t aligned_size) {
     // then add the chunk to the chunk map list.
     // Add footer to end of allocation
     struct allocation *footer = (struct allocation*) (static_cast<char*>(chunk) + (aligned_size - sizeof(allocation)));
-    debug(cout, "writing CHUNK footer at", footer);
+    debug(std::cout, "writing CHUNK footer at", footer);
     
     footer->next = nullptr;
     footer->size = 0;
@@ -51,7 +44,7 @@ void tag_chunk(char *chunk, size_t aligned_size) {
     footer->is_parent = true;
 
     struct allocation *header = (struct allocation*) chunk;
-    debug(cout, "writing CHUNK header at", header);
+    debug(std::cout, "writing CHUNK header at", header);
 
     header->next = footer;
     header->size = aligned_size - pagesize;
@@ -83,7 +76,7 @@ size_t add_chunk(size_t size) {
     size_t padded_size = (sizeof(allocation)*4) + ((size > DEFAULT_CHUNK_SIZE) ? size : DEFAULT_CHUNK_SIZE);
     aligned_size = (padded_size + (pagesize - (padded_size % pagesize)));
 
-    cout << "Created chunk with size: " << aligned_size << " bytes" << endl;
+    debug(std::cout, "Created chunk with size:", aligned_size, "bytes");
 
     char *ptr = static_cast<char*>(mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
 
@@ -94,7 +87,7 @@ size_t add_chunk(size_t size) {
 
 void* create_segment_in_chunk(allocation* chunk, size_t size) {
     // Find free space in parent chunk, and reserve it
-    cout << "SIZE REMAINING: " << chunk->size << endl;
+    debug(std::cout, "SIZE REMAINING:", chunk->size);
     allocation* cur = chunk;
 
     // Update total remaining contiguous space removing allocation size + header/footer padding
@@ -110,7 +103,7 @@ void* create_segment_in_chunk(allocation* chunk, size_t size) {
 
     // Now write a header and footer for the new segment
     // Add footer to end of allocation
-    debug(cout, "writing segment footer at", cur + (sizeof(allocation)*2) + (size/sizeof(allocation)));
+    debug(std::cout, "writing segment footer at", cur + (sizeof(allocation)*2) + (size/sizeof(allocation)));
     struct allocation *footer = (struct allocation*) cur + (sizeof(allocation)*2) + (size/sizeof(allocation));
 
     footer->next = cur->next;
@@ -119,7 +112,7 @@ void* create_segment_in_chunk(allocation* chunk, size_t size) {
     footer->is_footer = true;
     footer->is_parent = false;
 
-    debug(cout, "writing segment header at", cur + (sizeof(allocation)));
+    debug(std::cout, "writing segment header at", cur + (sizeof(allocation)));
     struct allocation *header = (struct allocation*) cur + (sizeof(allocation));
 
     header->next = footer;
@@ -130,7 +123,7 @@ void* create_segment_in_chunk(allocation* chunk, size_t size) {
 
     cur->next = header;
 
-    debug(cout, "Header next is", header->next, "and footer next is", footer->next);
+    debug(std::cout, "Header next is", header->next, "and footer next is", footer->next);
 
 #ifdef DEBUG
     print_memory_stack();
@@ -158,20 +151,20 @@ void *find_segment(size_t minimum_size) {
     print_memory_stack();
 #endif
 
-    debug(cout, "Searching for free segment..");
+    debug(std::cout, "Searching for free segment..");
 
     allocation *r = root;
     
     while (r != NULL) {
-        debug(cout, "Checking", r, "with size ", r->size, "and allocated state", (r->is_allocated ? "true" : "false"));
+        debug(std::cout, "Checking", r, "with size ", r->size, "and allocated state", (r->is_allocated ? "true" : "false"));
         if (r->size >= (minimum_size+pagesize) && r->is_allocated == false && r->is_parent == true && r->is_footer == false) {
-            debug(cout, "Found a free MMAP chunk (need ", minimum_size, " bytes, have ", r->size, " bytes available.");
+            debug(std::cout, "Found a free MMAP chunk (need ", minimum_size, " bytes, have ", r->size, " bytes available.");
             return create_segment_in_chunk(r, minimum_size);
         }
         r = r->next;
     }
 
-    debug(cout, "No suitable segments available, need to allocate one.");
+    debug(std::cout, "No suitable segments available, need to allocate one.");
 
     return NULL;
 }
@@ -212,7 +205,7 @@ void unlink_node(allocation* a, allocation* node_to_remove) {
 }
 
 void free_segment(void* ptr) {
-    debug(cout, "In free_segment() for ptr: ", ptr, "struct ptr is: ", ((void*) (static_cast<char*>(ptr) - sizeof(allocation))));
+    debug(std::cout, "In free_segment() for ptr: ", ptr, "struct ptr is: ", ((void*) (static_cast<char*>(ptr) - sizeof(allocation))));
 
     void *p = ((void *)(static_cast<char *>(ptr) - sizeof(allocation)));
 
@@ -223,12 +216,12 @@ void free_segment(void* ptr) {
         if (r->is_parent) current_parent_node = r;
 
         if (r == p) {
-            cout << "FOUND SEGMENT TO FREE AT " << r->size << endl;
+            debug(std::cout, "FOUND SEGMENT TO FREE AT", r->size);
             r->is_allocated = false;
             current_parent_node->total_allocations -= 1;
 
             if (current_parent_node->total_allocations == 0) {
-                cout << "NO REMAINING ALLOCATIONS, munmap()ing space" << endl;
+                debug(std::cout, "NO REMAINING ALLOCATIONS, munmap()ing space");
                 unlink_node(root, current_parent_node);
                 munmap(current_parent_node, current_parent_node->size);
             }
@@ -239,24 +232,24 @@ void free_segment(void* ptr) {
 }
 
 void print_memory_stack() {
-    cout << "" << endl;
-    cout << "MEMORY ALLOCATOR STACK" << endl;
-    cout << "-------------------------------------" << endl;
+    std::cout << "" << std::endl;
+    std::cout << "MEMORY ALLOCATOR STACK" << std::endl;
+    std::cout << "-------------------------------------" << std::endl;
 
     allocation *r = root;
 
-    if (r) cout << r << endl;
+    if (r) std::cout << r << std::endl;
 
     while (r != NULL) {
-        cout << "SEGMENT: " << r
+        std::cout << "SEGMENT: " << r
             << " SIZE: " << r->size
             << " IS_ALLOCATED: " << r->is_allocated
             << " TOTAL_ALLOCATIONS: " << r->total_allocations
             << " IS_PARENT: " << r->is_parent
             << " IS FOOTER: " << r->is_footer
             << " NEXT: " << r->next
-            << endl;
+            << std::endl;
         r = r->next;
     }
-    cout << "" << endl;
+    std::cout << "" << std::endl;
 }
