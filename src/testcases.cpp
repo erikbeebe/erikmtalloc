@@ -82,7 +82,7 @@ bool simple_new_test3() {
 bool simple_new_test4() {
     LargeTestStruct *ts = new LargeTestStruct;
 
-    //for (int i=0; i<sizeof(ts->g); ++i) ts->g[i] = 'A';
+    for (int i=0; i<sizeof(ts->g); ++i) ts->g[i] = 'A';
 
     delete ts;
 
@@ -125,7 +125,7 @@ void *thread_test1(void *threadid) {
     long tid;
     tid = (long) threadid;
 
-    cout << "Starting thread: " << tid << endl;
+    //cout << "Starting thread: " << tid << endl;
 
     TestStruct *ts = new TestStruct;
 

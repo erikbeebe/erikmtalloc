@@ -9,6 +9,7 @@ void debug(std::ostream& out, Arg&& arg, Args&&... args)
     return;
 #endif
 
+    out << "DEBUG: ";
     out << std::forward<Arg>(arg);
     ((out << ' ' << std::forward<Args>(args)), ...);
     out << std::endl;

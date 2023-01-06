@@ -1,7 +1,7 @@
 CXX = g++
 CC = $(CXX)
 
-CXXFLAGS = -g -Wno-deprecated -ggdb -O0 -std=c++2a -pthread
+CXXFLAGS = -g -Wno-deprecated -ggdb -O0 -std=c++2a -pthread -Wpedantic
 CFLAGS = $(CXXFLAGS)
  
 default: tests
