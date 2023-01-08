@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <ios>
 #include <ostream>
+#include <stdexcept>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <thread>
@@ -81,17 +82,23 @@ void tag_chunk(char *chunk, size_t aligned_size) {
 
 // Align to OS page size
 size_t align_to_pagesize(size_t size) {
-    return (size_t) (size + (pagesize - (size % pagesize)));
+    return static_cast<size_t>(size + (pagesize - (size % pagesize)));
 }
 
 // Align size to next nearest 4 byte boundary
 size_t align_4(size_t size) {
-    return (size_t) (size + (4 - (size % 4)));
+    return static_cast<size_t>(size + (4 - (size % 4)));
+}
+
+// Return size required (rounded up to nearest 4-byte boundary) including
+// additional segment header/footer that will be allocated
+size_t get_padded_size(size_t size) {
+    return static_cast<size_t>(align_4(size + sizeof(segment_s)*2));
 }
 
 // Get a pointer to the first byte of the payload section
 // from a segment_s header
-void* get_payload(uintptr_t addr) {
+void* get_payload(uintptr_t& addr) {
     return reinterpret_cast<void *>(align_4(addr + sizeof(segment_s)));
 }
 
@@ -105,11 +112,12 @@ void* get_header(void* ptr) {
 // than the chunk size, in which case, create a chunk aligned up to the nearest page
 // beyond the requested size.
 size_t add_chunk(size_t size) {
-    size_t aligned_size;
-
     // Pad to ensure there's enough room for desired allocation + headers/footers structs
-    size_t padded_size = (sizeof(chunk_s)*4) + ((size > DEFAULT_CHUNK_SIZE) ? size : DEFAULT_CHUNK_SIZE);
-    aligned_size = align_to_pagesize(padded_size);
+    size_t required_size = align_to_pagesize(sizeof(chunk_s)*2) + align_to_pagesize(get_padded_size(size));
+
+    // If resulting size is larger than the default chunk size, increase the size of the mmap request to
+    // the nearest pagesize boundary past the requested size
+    size_t aligned_size = (required_size > DEFAULT_CHUNK_SIZE) ? required_size : align_to_pagesize(DEFAULT_CHUNK_SIZE);
 
     debug(std::cout, "Created chunk with size:", aligned_size, "bytes");
 
@@ -127,7 +135,7 @@ void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
 
     // Update total remaining contiguous space removing allocation size + header/footer padding
     // TODO: Align this?
-    chunk->remaining_size = chunk->remaining_size - (size + (sizeof(segment_s)*2));
+    chunk->remaining_size = chunk->remaining_size - get_padded_size(size);
     chunk->total_allocations += 1;
 
     // Skip to free space pool
@@ -147,6 +155,7 @@ void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
     // Now write a header and footer for the new segment
     // Add footer to end of allocation
     struct segment_s* footer = reinterpret_cast<segment_s*>(align_4(free_space_ptr + sizeof(segment_s) + size));
+    debug(std::cout, "Writing segment footer at address", footer);
 
     footer->next = nullptr;
     footer->size = size;
@@ -154,6 +163,7 @@ void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
     footer->is_footer = true;
 
     struct segment_s* header = reinterpret_cast<segment_s*>(align_4(free_space_ptr));
+    debug(std::cout, "Writing segment header at address", header);
 
     header->next = footer;
     header->size = size;
@@ -231,14 +241,20 @@ void *find_segment(size_t minimum_size) {
     chunk_s* parent_chunk;
     
     while (r) {
-        debug(std::cout, "Checking CHUNK", r, "with size", r->allocated_size, "and remaining space", r->remaining_size);
+        if (r->is_footer) {
+            r = r->next;
+            continue;
+        }
+
+        debug(std::cout, "Checking CHUNK", r, "with size", r->allocated_size, "and remaining space", r->remaining_size,
+          "for minimum required size of", minimum_size);
         parent_chunk = r;
         segment_s* segment_iter = r->next_segment;
 
         while (segment_iter) {
             // Look for a free segment to reclaim while searching for free chunk space
             // If we find it, re-use instead of allocating new segments
-            if (segment_iter->size >= (minimum_size) && segment_iter->is_allocated == false && segment_iter->is_footer == false) {
+            if (segment_iter->size >= minimum_size && segment_iter->is_allocated == false && segment_iter->is_footer == false) {
                 // Located an existing segment large enough for allocation and marked unallocated
                 debug(std::cout, "Found a reusable segment in chunk (need", minimum_size, "bytes, have", segment_iter->size, "bytes available.");
                 return reserve_segment(parent_chunk, segment_iter, minimum_size);
@@ -246,7 +262,7 @@ void *find_segment(size_t minimum_size) {
             segment_iter = segment_iter->next;
         }
 
-        if (r->remaining_size >= (minimum_size+pagesize) && r->is_footer == false) {
+        if (r->remaining_size >= minimum_size && r->is_footer == false) {
             // Unable to find an unallocated segment, allocate a new segment in chunk
             debug(std::cout, "Found a free MMAP chunk (need", minimum_size, "bytes, have", r->remaining_size, "bytes available.");
             return create_segment_in_chunk(r, minimum_size);
