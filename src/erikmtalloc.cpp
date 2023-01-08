@@ -11,6 +11,7 @@
 
 #define DEFAULT_CHUNK_SIZE 1024*256 // 256KB chunks
 
+// Structure for segments allocated inside of an MMAPed "chunk"
 struct segment_s {
     segment_s* next;
     size_t size;
@@ -18,6 +19,7 @@ struct segment_s {
     bool is_footer;
 };
 
+// mmap()'ed parent "chunks", on which variable size "segments" are allocated
 struct chunk_s {
     chunk_s* next;
     size_t allocated_size;
@@ -37,10 +39,10 @@ chunk_s* root;
 chunk_s* cur;
 size_t pagesize = sysconf(_SC_PAGE_SIZE);
 
+// Add a header and footer identifying metadata for new chunk,
+// then add the chunk to the chunk map list.
+// Add footer to end of allocation
 void tag_chunk(char *chunk, size_t aligned_size) {
-    // Add a header and footer identifying metadata for new chunk,
-    // then add the chunk to the chunk map list.
-    // Add footer to end of allocation
     struct chunk_s* footer = reinterpret_cast<chunk_s*>(static_cast<char*>(chunk) + (aligned_size - sizeof(chunk_s)));
     debug(std::cout, "writing CHUNK footer at", footer);
     
@@ -77,31 +79,32 @@ void tag_chunk(char *chunk, size_t aligned_size) {
     }
 }
 
+// Align to OS page size
 size_t align_to_pagesize(size_t size) {
     return (size_t) (size + (pagesize - (size % pagesize)));
 }
 
+// Align size to next nearest 4 byte boundary
 size_t align_4(size_t size) {
-    // Align size to next nearest 4 byte boundary
     return (size_t) (size + (4 - (size % 4)));
 }
 
+// Get a pointer to the first byte of the payload section
+// from a segment_s header
 void* get_payload(uintptr_t addr) {
-    // Get a pointer to the first byte of the payload section
-    // from a segment_s header
     return reinterpret_cast<void *>(align_4(addr + sizeof(segment_s)));
 }
 
+// Get a pointer to the header struct of payload
 void* get_header(void* ptr) {
-    // Get a pointer to the header struct of payload
-    return reinterpret_cast<void *>((uintptr_t) ptr - (sizeof(segment_s)));
+    return reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(ptr) - (sizeof(segment_s)));
 }
 
+// Add a chunk capable of containing at least the size passed.  By default, create
+// a large chunk (specified by DEFAULT_CHUNK_SIZE), unless new() requires more memory
+// than the chunk size, in which case, create a chunk aligned up to the nearest page
+// beyond the requested size.
 size_t add_chunk(size_t size) {
-    // Add a chunk capable of containing at least the size passed.  By default, create
-    // a large chunk (specified by DEFAULT_CHUNK_SIZE), unless new() requires more memory
-    // than the chunk size, in which case, create a chunk aligned up to the nearest page
-    // beyond the requested size.
     size_t aligned_size;
 
     // Pad to ensure there's enough room for desired allocation + headers/footers structs
@@ -117,8 +120,8 @@ size_t add_chunk(size_t size) {
     return aligned_size;
 }
 
+// Find free space in parent chunk, and reserve it
 void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
-    // Find free space in parent chunk, and reserve it
     debug(std::cout, "SIZE REMAINING:", chunk->remaining_size);
     segment_s* segment_iter = chunk->next_segment;
 
@@ -132,13 +135,13 @@ void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
     uintptr_t free_space_ptr;
     if (segment_iter == nullptr) {
         // No segments currently exist in this chunk, initialize with offset from chunk_s header
-        free_space_ptr = (uintptr_t) chunk + sizeof(chunk_s) + 1;
+        free_space_ptr = reinterpret_cast<uintptr_t>(chunk) + sizeof(chunk_s) + 1;
     } else {
         // Iterate to end of currently allocated space
         while (segment_iter->next) {
             segment_iter = segment_iter->next;
         }
-        free_space_ptr = (uintptr_t) segment_iter + sizeof(segment_s) + 1;
+        free_space_ptr = reinterpret_cast<uintptr_t>(segment_iter) + sizeof(segment_s) + 1;
     }
 
     // Now write a header and footer for the new segment
@@ -177,8 +180,9 @@ void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
     return get_payload(free_space_ptr);
 }
 
+// Find free space in parent chunk (if it exists), reserve it,
+// and return a void* pointer to it.
 void* reserve_segment(chunk_s* parent_chunk, segment_s* segment, size_t size) {
-    // Find free space in parent chunk, and reserve it
     debug(std::cout, "Reusing segment:", segment, "in parent chunk:", parent_chunk,
       "with size:", segment->size, "for new segment of size:", size);
 
@@ -195,8 +199,14 @@ void* reserve_segment(chunk_s* parent_chunk, segment_s* segment, size_t size) {
     return reinterpret_cast<void *>((uintptr_t) segment + sizeof(segment_s));
 }
 
+// Find and return a void* pointer to a new memory segment to new()
+// The second call to find_segment() is guaranteed to return a segment if
+// add_chunk succeeds (as this is happening in a mutex that prevents anyone)
+// else from claiming it.  There's a little unnecessary overhead since we
+// walk the linked list from root to get there, so it makes sense to refactor
+// this later to have add_chunk also create the first segment and return the
+// pointer to it directly.
 void *get_segment(size_t size) {
-    // Find and return a void* pointer to a new memory segment to new()
     void *seg = find_segment(size);
 
     if (seg == nullptr) {
@@ -209,6 +219,7 @@ void *get_segment(size_t size) {
     return find_segment(size);
 }
 
+// Locate (or create) and return a viable segment, and return a void* to it.
 void *find_segment(size_t minimum_size) {
 #ifdef DEBUG
     print_memory_stack();
@@ -219,7 +230,7 @@ void *find_segment(size_t minimum_size) {
     chunk_s* r = root;
     chunk_s* parent_chunk;
     
-    while (r != NULL) {
+    while (r) {
         debug(std::cout, "Checking CHUNK", r, "with size", r->allocated_size, "and remaining space", r->remaining_size);
         parent_chunk = r;
         segment_s* segment_iter = r->next_segment;
@@ -248,7 +259,7 @@ void *find_segment(size_t minimum_size) {
 
     debug(std::cout, "No suitable segments available, need to allocate one.");
 
-    return NULL;
+    return nullptr;
 }
 
 void unlink_node(chunk_s* root_node, chunk_s* node_to_remove) {
@@ -294,7 +305,7 @@ void free_segment(void* ptr) {
     chunk_s* r = root;
     chunk_s* current_parent_node;
 
-    while (r && r->next != NULL) {
+    while (r) {
         // Check that pointer address that we're freeing is in the range of allocated
         // space for this chunk.  If it's not, don't bother descending into this chunks
         // segments, move to next chunk.
@@ -336,7 +347,7 @@ void print_memory_stack() {
 
     if (r) std::cout << r << std::endl;
 
-    while (r != NULL) {
+    while (r) {
         std::cout << std::boolalpha
             << "SEGMENT: " << r
             << " ALLOCATED SIZE: " << r->allocated_size
