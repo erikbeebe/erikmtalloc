@@ -20,7 +20,8 @@ struct segment_s {
 
 struct chunk_s {
     chunk_s* next;
-    size_t size;
+    size_t allocated_size;
+    size_t remaining_size;
     bool is_allocated;
     bool is_footer;
     bool is_parent;
@@ -44,7 +45,9 @@ void tag_chunk(char *chunk, size_t aligned_size) {
     debug(std::cout, "writing CHUNK footer at", footer);
     
     footer->next = nullptr;
-    footer->size = 0;
+    // Size tracked in header only
+    footer->allocated_size = 0;
+    footer->remaining_size = 0;
     footer->is_allocated = false;
     footer->is_footer = true;
     footer->is_parent = true;
@@ -54,7 +57,8 @@ void tag_chunk(char *chunk, size_t aligned_size) {
     debug(std::cout, "writing CHUNK header at", header);
 
     header->next = footer;
-    header->size = aligned_size - pagesize;
+    header->allocated_size = aligned_size - pagesize;
+    header->remaining_size = aligned_size - pagesize;
     header->is_allocated = false;
     header->is_footer = false;
     header->is_parent = true;
@@ -115,12 +119,12 @@ size_t add_chunk(size_t size) {
 
 void* create_segment_in_chunk(chunk_s* chunk, size_t size) {
     // Find free space in parent chunk, and reserve it
-    debug(std::cout, "SIZE REMAINING:", chunk->size);
+    debug(std::cout, "SIZE REMAINING:", chunk->remaining_size);
     segment_s* segment_iter = chunk->next_segment;
 
     // Update total remaining contiguous space removing allocation size + header/footer padding
     // TODO: Align this?
-    chunk->size = chunk->size - (size + (sizeof(segment_s)*2));
+    chunk->remaining_size = chunk->remaining_size - (size + (sizeof(segment_s)*2));
     chunk->total_allocations += 1;
 
     // Skip to free space pool
@@ -216,7 +220,7 @@ void *find_segment(size_t minimum_size) {
     chunk_s* parent_chunk;
     
     while (r != NULL) {
-        debug(std::cout, "Checking CHUNK", r, "with size", r->size);
+        debug(std::cout, "Checking CHUNK", r, "with size", r->allocated_size, "and remaining space", r->remaining_size);
         parent_chunk = r;
         segment_s* segment_iter = r->next_segment;
 
@@ -231,9 +235,9 @@ void *find_segment(size_t minimum_size) {
             segment_iter = segment_iter->next;
         }
 
-        if (r->size >= (minimum_size+pagesize) && r->is_footer == false) {
+        if (r->remaining_size >= (minimum_size+pagesize) && r->is_footer == false) {
             // Unable to find an unallocated segment, allocate a new segment in chunk
-            debug(std::cout, "Found a free MMAP chunk (need", minimum_size, "bytes, have", r->size, "bytes available.");
+            debug(std::cout, "Found a free MMAP chunk (need", minimum_size, "bytes, have", r->remaining_size, "bytes available.");
             return create_segment_in_chunk(r, minimum_size);
         } else {
             debug(std::cout, "Skipping chunk", r, "- no space available");
@@ -291,6 +295,15 @@ void free_segment(void* ptr) {
     chunk_s* current_parent_node;
 
     while (r && r->next != NULL) {
+        // Check that pointer address that we're freeing is in the range of allocated
+        // space for this chunk.  If it's not, don't bother descending into this chunks
+        // segments, move to next chunk.
+        if (!(r < ptr && (r + r->allocated_size) > ptr)) {
+            debug(std::cout, "Skipping chunk", r, "in free for ptr address", ptr);
+            r = r->next;
+            continue;
+        }
+
         current_parent_node = r;
         segment_s* segment_iter = r->next_segment;
 
@@ -303,7 +316,7 @@ void free_segment(void* ptr) {
                 if (current_parent_node->total_allocations == 0) {
                     debug(std::cout, "No remaining allocated segments in chunk, munmap()ing chunk space");
                     unlink_node(root, current_parent_node);
-                    munmap(current_parent_node, current_parent_node->size);
+                    munmap(current_parent_node, current_parent_node->allocated_size);
                 }
                 return;
             }
@@ -326,7 +339,8 @@ void print_memory_stack() {
     while (r != NULL) {
         std::cout << std::boolalpha
             << "SEGMENT: " << r
-            << " SIZE: " << r->size
+            << " ALLOCATED SIZE: " << r->allocated_size
+            << " REMAINING SIZE: " << r->remaining_size
             << " IS_ALLOCATED: " << r->is_allocated
             << " TOTAL_ALLOCATIONS: " << r->total_allocations
             << " IS_PARENT: " << r->is_parent
