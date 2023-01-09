@@ -8,6 +8,8 @@ using namespace std;
 #define EXPECT_PASS(x) { if (!(x)) { cout << __FUNCTION__ << " failed on line " << __LINE__ << endl; } }
 #define EXPECT_FAIL(x) { if ((x)) { cout << __FUNCTION__ << " failed on line " << __LINE__ << endl; } }
 #define LARGE_CAPACITY 65535
+// Define parallel threads to test with
+#define THREAD_COUNT 512
 
 struct TestStruct {
     char a[1024];
@@ -121,11 +123,11 @@ bool simple_new_test5() {
 // - Test base case (no modifications to allocator) for time per allocation
 // - Test with modified allocator and measure delta
 // - Test n threads concurrently to test for locking functionality or side effects
-void *thread_test1(void *threadid) {
+void* thread_test1(void *threadid) {
     long tid;
     tid = (long) threadid;
 
-    //cout << "Starting thread: " << tid << endl;
+    cout << "Starting thread: " << tid << endl;
 
     TestStruct *ts = new TestStruct;
 
@@ -137,20 +139,21 @@ void *thread_test1(void *threadid) {
     for (int i=0; i<sizeof(ts->f)/sizeof(double); ++i) ts->f[i] = 3.14;
 
     delete ts;
+    pthread_exit(NULL);
 }
 
-void thread_runner(int numthreads) {
-    pthread_t threads[numthreads];
+void thread_runner() {
+    pthread_t threads[THREAD_COUNT];
 
     auto start = std::chrono::system_clock::now();
 
-    for (long i=0; i < numthreads; ++i) {
+    for (long i=0; i < THREAD_COUNT; ++i) {
         int rc = pthread_create(&threads[i], NULL, thread_test1, (void *) i);
 
         if (rc) cout << "Thread " << i << " failed to execute." << endl;
     }
 
-    for (long i=0; i < numthreads; ++i) pthread_join(threads[i], NULL);
+    for (long i=0; i < THREAD_COUNT; ++i) pthread_join(threads[i], NULL);
 
     auto end = std::chrono::system_clock::now();
     chrono::duration<double> elapsed_time = end - start;
@@ -188,7 +191,7 @@ void run_simple_new_tests() {
     EXPECT_PASS(simple_new_test5());
     
     // Thread tests
-    thread_runner(512);
+    thread_runner();
 }
 
 // Timed loop of new / delete

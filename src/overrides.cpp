@@ -33,7 +33,7 @@ void* operator new(size_t size) {
     return ptr;
 }
 
-void operator delete(void* ptr) {
+void operator delete(void* ptr) noexcept {
     debug(std::cout, "Acquiring lock in operator::delete");
     unique_lock<mutex> allocation_lock(mut);
 

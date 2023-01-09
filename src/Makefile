@@ -1,4 +1,9 @@
+# gcc support tested with:
+# g++ (Ubuntu 9.4.0-1ubuntu1~20.04.1) 9.4.0
 CXX = g++
+# clang++ support tested with:
+# clang version 10.0.0-4ubuntu1 
+# CXX = clang++
 CC = $(CXX)
 
 CXXFLAGS = -g -Wno-deprecated -ggdb -O0 -std=c++2a -pthread -Wpedantic
